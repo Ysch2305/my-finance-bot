@@ -1,182 +1,228 @@
+import sqlite3
 import os
-import logging
-from datetime import datetime
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import matplotlib.pyplot as plt
 
-from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    filters, ConversationHandler, ContextTypes
+)
 
 TOKEN = os.getenv("TOKEN")
 
-logging.basicConfig(level=logging.INFO)
+# ===== DATABASE =====
+conn = sqlite3.connect("database.db", check_same_thread=False)
+cursor = conn.cursor()
 
-data = []
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS transaksi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipe TEXT,
+    bank TEXT,
+    kategori TEXT,
+    nominal INTEGER,
+    tanggal TEXT
+)
+""")
+conn.commit()
 
-# =========================
-# SET COMMAND (POPUP TELEGRAM)
-# =========================
-async def set_commands(app):
-    commands = [
-        BotCommand("start", "Mulai bot"),
-        BotCommand("tambah_pemasukan", "Tambah pemasukan"),
-        BotCommand("tambah_pengeluaran", "Tambah pengeluaran"),
-        BotCommand("laporan", "Lihat laporan"),
-        BotCommand("delete", "Hapus data"),
-        BotCommand("grafik", "Grafik keuangan"),
-    ]
-    await app.bot.set_my_commands(commands)
+# ===== STATES =====
+MENU, BANK, KATEGORI, NOMINAL, TANGGAL, PILIH_BULAN, DELETE = range(7)
 
-# =========================
-# START
-# =========================
+# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot siap digunakan")
+    keyboard = [
+        ["Pemasukan", "Pengeluaran"],
+        ["Lihat Laporan", "Grafik"],
+        ["Delete Data"]
+    ]
+    await update.message.reply_text(
+        "📌 Pilih menu:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return MENU
 
-# =========================
-# TAMBAH PEMASUKAN
-# =========================
-async def tambah_pemasukan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== MENU =====
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if text == "Pengeluaran":
+        context.user_data["tipe"] = "pengeluaran"
+    elif text == "Pemasukan":
+        context.user_data["tipe"] = "pemasukan"
+    elif text == "Lihat Laporan":
+        await update.message.reply_text("Masukkan bulan (YYYY-MM)")
+        return PILIH_BULAN
+    elif text == "Grafik":
+        await update.message.reply_text("Masukkan bulan (YYYY-MM)")
+        return PILIH_BULAN
+    elif text == "Delete Data":
+        cursor.execute("SELECT id, kategori, nominal FROM transaksi")
+        rows = cursor.fetchall()
+
+        if not rows:
+            await update.message.reply_text("❌ Tidak ada data")
+            return await start(update, context)
+
+        text_list = "🗑 Data:\n\n"
+        for r in rows:
+            text_list += f"{r[0]}. {r[1]} - {r[2]}\n"
+
+        await update.message.reply_text(text_list)
+        await update.message.reply_text("Masukkan ID yang ingin dihapus:")
+        return DELETE
+
+    keyboard = [["BCA", "MANDIRI"]]
+    await update.message.reply_text(
+        "🏦 Pilih Bank:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return BANK
+
+# ===== DELETE =====
+async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        jumlah = int(context.args[0])
-        keterangan = context.args[1]
-        bank = context.args[2]
+        id_delete = int(update.message.text)
+        cursor.execute("DELETE FROM transaksi WHERE id = ?", (id_delete,))
+        conn.commit()
 
-        data.append({
-            "tanggal": datetime.now(),
-            "tipe": "pemasukan",
-            "jumlah": jumlah,
-            "keterangan": keterangan,
-            "bank": bank
-        })
-
-        await update.message.reply_text("✅ Pemasukan ditambahkan!")
+        await update.message.reply_text("✅ Data berhasil dihapus")
     except:
-        await update.message.reply_text("❌ Format salah!")
+        await update.message.reply_text("❌ ID tidak valid")
 
-# =========================
-# TAMBAH PENGELUARAN
-# =========================
-async def tambah_pengeluaran(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        jumlah = int(context.args[0])
-        keterangan = context.args[1]
-        bank = context.args[2]
+    return await start(update, context)
 
-        data.append({
-            "tanggal": datetime.now(),
-            "tipe": "pengeluaran",
-            "jumlah": jumlah,
-            "keterangan": keterangan,
-            "bank": bank
-        })
+# ===== BANK =====
+async def pilih_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bank"] = update.message.text
 
-        await update.message.reply_text("✅ Pengeluaran ditambahkan!")
-    except:
-        await update.message.reply_text("❌ Format salah!")
-
-# =========================
-# LAPORAN
-# =========================
-async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data:
-        await update.message.reply_text("📭 Belum ada data")
-        return
-
-    text = "📊 LAPORAN:\n\n"
-    total_masuk = 0
-    total_keluar = 0
-
-    for i, item in enumerate(data):
-        text += (
-            f"{i}. {item['tipe']} - Rp{item['jumlah']}\n"
-            f"   {item['keterangan']} ({item['bank']})\n\n"
+    if context.user_data["tipe"] == "pengeluaran":
+        keyboard = [["Investasi", "Kendaraan"], ["Pribadi", "Rumah"]]
+        await update.message.reply_text(
+            "📂 Pilih kategori:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        return KATEGORI
+    else:
+        context.user_data["kategori"] = "-"
+        await update.message.reply_text("💰 Masukkan nominal:")
+        return NOMINAL
 
-        if item["tipe"] == "pemasukan":
-            total_masuk += item["jumlah"]
-        else:
-            total_keluar += item["jumlah"]
+# ===== KATEGORI =====
+async def kategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["kategori"] = update.message.text
+    await update.message.reply_text("💰 Masukkan nominal:")
+    return NOMINAL
 
-    saldo = total_masuk - total_keluar
+# ===== NOMINAL =====
+async def nominal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data["nominal"] = int(update.message.text)
+    except:
+        await update.message.reply_text("❌ Masukkan angka!")
+        return NOMINAL
 
-    text += f"💰 Total Masuk: Rp{total_masuk}\n"
-    text += f"💸 Total Keluar: Rp{total_keluar}\n"
-    text += f"📌 Saldo: Rp{saldo}"
+    await update.message.reply_text("📅 Masukkan tanggal (YYYY-MM-DD):")
+    return TANGGAL
+
+# ===== TANGGAL =====
+async def tanggal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["tanggal"] = update.message.text
+
+    cursor.execute("""
+    INSERT INTO transaksi (tipe, bank, kategori, nominal, tanggal)
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        context.user_data["tipe"],
+        context.user_data["bank"],
+        context.user_data["kategori"],
+        context.user_data["nominal"],
+        context.user_data["tanggal"]
+    ))
+    conn.commit()
+
+    await update.message.reply_text("✅ Data berhasil disimpan!")
+    return await start(update, context)
+
+# ===== LAPORAN + GRAFIK =====
+async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bulan = update.message.text
+
+    cursor.execute("""
+    SELECT tipe, nominal FROM transaksi
+    WHERE substr(tanggal, 1, 7) = ?
+    """, (bulan,))
+    
+    data = cursor.fetchall()
+
+    pemasukan = sum(d[1] for d in data if d[0] == "pemasukan")
+    pengeluaran = sum(d[1] for d in data if d[0] == "pengeluaran")
+    saldo = pemasukan - pengeluaran
+
+    text = f"""
+📊 LAPORAN {bulan}
+
+💰 Pemasukan: {pemasukan}
+📤 Pengeluaran: {pengeluaran}
+📈 Saldo: {saldo}
+"""
 
     await update.message.reply_text(text)
 
-# =========================
-# DELETE
-# =========================
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        index = int(context.args[0])
-
-        if index < 0 or index >= len(data):
-            await update.message.reply_text("❌ Index tidak valid")
-            return
-
-        deleted = data.pop(index)
-
-        await update.message.reply_text(
-            f"🗑 Data dihapus:\n{deleted['keterangan']} - Rp{deleted['jumlah']}"
-        )
-    except:
-        await update.message.reply_text("❌ Format: /delete index")
-
-# =========================
-# GRAFIK
-# =========================
-async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data:
-        await update.message.reply_text("❌ Tidak ada data")
-        return
-
-    bulan = {}
-
-    for item in data:
-        key = item["tanggal"].strftime("%Y-%m")
-
-        if key not in bulan:
-            bulan[key] = 0
-
-        if item["tipe"] == "pemasukan":
-            bulan[key] += item["jumlah"]
-        else:
-            bulan[key] -= item["jumlah"]
-
-    x = list(bulan.keys())
-    y = list(bulan.values())
+    # ===== GRAFIK =====
+    x = ["Pemasukan", "Pengeluaran"]
+    y = [pemasukan, pengeluaran]
 
     plt.figure()
-    plt.plot(x, y)
-    plt.title("Grafik Keuangan Bulanan")
+    plt.bar(x, y)
 
-    filename = "grafik.png"
-    plt.savefig(filename)
+    file = "grafik.png"
+    plt.savefig(file)
     plt.close()
 
-    await update.message.reply_photo(photo=open(filename, "rb"))
+    await update.message.reply_photo(photo=open(file, "rb"))
 
-# =========================
-# MAIN
-# =========================
-def main():
-    print("🤖 Bot berjalan...")
+    return await start(update, context)
 
+# ===== RUN BOT =====
+def run_bot():
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("tambah_pemasukan", tambah_pemasukan))
-    app.add_handler(CommandHandler("tambah_pengeluaran", tambah_pengeluaran))
-    app.add_handler(CommandHandler("laporan", laporan))
-    app.add_handler(CommandHandler("delete", delete))
-    app.add_handler(CommandHandler("grafik", grafik))
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu)],
+            BANK: [MessageHandler(filters.TEXT & ~filters.COMMAND, pilih_bank)],
+            KATEGORI: [MessageHandler(filters.TEXT & ~filters.COMMAND, kategori)],
+            NOMINAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, nominal)],
+            TANGGAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tanggal)],
+            PILIH_BULAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, laporan)],
+            DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_data)],
+        },
+        fallbacks=[CommandHandler("start", start)]
+    )
 
-    # 🔥 SET POPUP COMMAND
-    app.post_init = set_commands
+    app.add_handler(conv)
 
-    app.run_polling(drop_pending_updates=True)
+    print("🤖 Bot berjalan...")
+    app.run_polling()
 
+# ===== WEB SERVER =====
+def run_web_server():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+
+    port = int(os.environ.get("PORT", 8000))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    print(f"🌐 Web server running on port {port}")
+    server.serve_forever()
+
+# ===== MAIN =====
 if __name__ == "__main__":
-    main()
+    threading.Thread(target=run_web_server).start()
+    run_bot()
