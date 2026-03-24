@@ -1,13 +1,19 @@
 import sqlite3
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ConversationHandler, ContextTypes
 )
 
-# ===== TOKEN (AMAN) =====
+# ===== TOKEN =====
 TOKEN = os.getenv("TOKEN")
+
+if not TOKEN:
+    print("❌ TOKEN tidak ditemukan! Pastikan sudah set di Environment Variables")
+    exit()
 
 # ===== DATABASE =====
 conn = sqlite3.connect("database.db", check_same_thread=False)
@@ -113,9 +119,9 @@ async def tanggal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Data berhasil disimpan!")
     return await start(update, context)
 
-# ===== LAPORAN BULANAN =====
+# ===== LAPORAN =====
 async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bulan = update.message.text  # format YYYY-MM
+    bulan = update.message.text
 
     cursor.execute("""
     SELECT tipe, SUM(nominal) FROM transaksi
@@ -136,23 +142,14 @@ async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     saldo = pemasukan - pengeluaran
 
-    # ===== ANALISA =====
     if pemasukan == 0 and pengeluaran == 0:
         analisa = "⚠️ Belum ada data di bulan ini."
     elif saldo < 0:
-        analisa = (
-            "⚠️ Arus kas BURUK!\n"
-            "Pengeluaran lebih besar dari pemasukan.\n"
-            "Kemungkinan terlalu banyak spending konsumtif."
-        )
+        analisa = "⚠️ Arus kas BURUK! Pengeluaran lebih besar dari pemasukan."
     elif pengeluaran > pemasukan * 0.8:
-        analisa = (
-            "⚠️ Arus kas kurang sehat.\n"
-            "Pengeluaran mendekati pemasukan.\n"
-            "Sebaiknya mulai kontrol pengeluaran."
-        )
+        analisa = "⚠️ Pengeluaran terlalu besar dari pemasukan."
     else:
-        analisa = "✅ Arus kas BAGUS! Keuangan kamu sehat."
+        analisa = "✅ Arus kas BAGUS! Keuangan sehat."
 
     text = f"""
 📊 LAPORAN BULAN {bulan}
@@ -164,12 +161,11 @@ async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🧠 Analisa:
 {analisa}
 """
-
     await update.message.reply_text(text)
     return await start(update, context)
 
-# ===== MAIN =====
-def main():
+# ===== TELEGRAM BOT RUNNER =====
+def run_bot():
     app = Application.builder().token(TOKEN).build()
 
     conv = ConversationHandler(
@@ -187,8 +183,23 @@ def main():
 
     app.add_handler(conv)
 
-    print("Bot berjalan...")
+    print("🤖 Bot berjalan...")
     app.run_polling()
 
+# ===== FAKE WEB SERVER (UNTUK KOYEB FREE) =====
+def run_web_server():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+
+    port = int(os.environ.get("PORT", 8000))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    print(f"🌐 Web server running on port {port}")
+    server.serve_forever()
+
+# ===== MAIN =====
 if __name__ == "__main__":
-    main()
+    threading.Thread(target=run_web_server).start()
+    run_bot()
