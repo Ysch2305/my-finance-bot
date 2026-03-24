@@ -1,4 +1,6 @@
 import sqlite3
+import os
+import matplotlib.pyplot as plt
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -30,7 +32,7 @@ MENU, PILIH_BANK, PILIH_KATEGORI, INPUT_NOMINAL, INPUT_TANGGAL, LAPORAN = range(
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["Pemasukan", "Pengeluaran"], ["Lihat Laporan"]]
+    keyboard = [["Pemasukan", "Pengeluaran"], ["Lihat Laporan", "Grafik"]]
     await update.message.reply_text(
         "📌 Pilih menu:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -46,8 +48,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "Pengeluaran":
         context.user_data["tipe"] = "pengeluaran"
     elif text == "Lihat Laporan":
-        await update.message.reply_text("Masukkan bulan (format: YYYY-MM)")
+        await update.message.reply_text("Masukkan bulan (YYYY-MM)")
         return LAPORAN
+    elif text == "Grafik":
+        await update.message.reply_text("Masukkan bulan (YYYY-MM)")
+        return "GRAFIK"
     else:
         return MENU
 
@@ -153,40 +158,77 @@ Tanggal: {tanggal}
     text = f"""
 📊 LAPORAN BULAN {bulan}
 
-💰 Total Pemasukan: {pemasukan}
-📤 Total Pengeluaran: {pengeluaran}
+💰 Pemasukan: {pemasukan}
+📤 Pengeluaran: {pengeluaran}
 📈 Saldo: {saldo}
 
-📋 Detail Transaksi:
+📋 Detail:
 {detail}
 """
 
-    # ANALISA SEDERHANA
     if saldo < 0:
-        text += "\n⚠️ Arus kas BURUK! Pengeluaran lebih besar dari pemasukan."
+        text += "\n⚠️ Arus kas BURUK!"
     elif pengeluaran > pemasukan * 0.8:
-        text += "\n⚠️ Pengeluaran cukup besar, hati-hati!"
+        text += "\n⚠️ Pengeluaran tinggi!"
     else:
         text += "\n✅ Arus kas sehat."
 
     await update.message.reply_text(text)
     return await start(update, context)
 
+# ================= GRAFIK =================
+async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bulan = update.message.text
+
+    cursor.execute("""
+    SELECT tanggal, tipe, nominal
+    FROM transaksi
+    WHERE substr(tanggal, 1, 7) = ?
+    """, (bulan,))
+
+    data = cursor.fetchall()
+
+    if not data:
+        await update.message.reply_text("❌ Tidak ada data untuk grafik.")
+        return await start(update, context)
+
+    pemasukan = 0
+    pengeluaran = 0
+
+    for tanggal, tipe, nominal in data:
+        if tipe == "pemasukan":
+            pemasukan += nominal
+        else:
+            pengeluaran += nominal
+
+    labels = ["Pemasukan", "Pengeluaran"]
+    values = [pemasukan, pengeluaran]
+
+    plt.figure()
+    plt.bar(labels, values)
+    plt.title(f"Grafik Keuangan {bulan}")
+
+    file_name = f"grafik_{bulan}.png"
+    plt.savefig(file_name)
+    plt.close()
+
+    await update.message.reply_photo(photo=open(file_name, "rb"))
+
+    return await start(update, context)
+
 # ================= DELETE =================
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         id_trx = int(context.args[0])
-
         cursor.execute("DELETE FROM transaksi WHERE id = ?", (id_trx,))
         conn.commit()
 
-        await update.message.reply_text(f"✅ Transaksi ID {id_trx} berhasil dihapus!")
+        await update.message.reply_text(f"✅ ID {id_trx} dihapus!")
     except:
-        await update.message.reply_text("❌ Gunakan format: /delete ID")
+        await update.message.reply_text("❌ Gunakan: /delete ID")
 
 # ================= MAIN =================
 def run_bot():
-    import os
     TOKEN = os.getenv("TOKEN")
 
     app = Application.builder().token(TOKEN).build()
@@ -200,6 +242,7 @@ def run_bot():
             INPUT_NOMINAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_nominal)],
             INPUT_TANGGAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_tanggal)],
             LAPORAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, laporan)],
+            "GRAFIK": [MessageHandler(filters.TEXT & ~filters.COMMAND, grafik)],
         },
         fallbacks=[CommandHandler("start", start)],
     )
@@ -208,7 +251,7 @@ def run_bot():
     app.add_handler(CommandHandler("delete", delete))
 
     print("🤖 Bot berjalan...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 # ================= RUN =================
 if __name__ == "__main__":
