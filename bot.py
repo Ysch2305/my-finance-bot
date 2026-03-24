@@ -1,7 +1,9 @@
 import sqlite3
 import os
+import asyncio
 import matplotlib.pyplot as plt
-from telegram import Update, ReplyKeyboardMarkup
+
+from telegram import Update, ReplyKeyboardMarkup, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -28,7 +30,7 @@ CREATE TABLE IF NOT EXISTS transaksi (
 conn.commit()
 
 # ================= STATE =================
-MENU, PILIH_BANK, PILIH_KATEGORI, INPUT_NOMINAL, INPUT_TANGGAL, LAPORAN = range(6)
+MENU, PILIH_BANK, PILIH_KATEGORI, INPUT_NOMINAL, INPUT_TANGGAL, LAPORAN, GRAFIK = range(7)
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,7 +54,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return LAPORAN
     elif text == "Grafik":
         await update.message.reply_text("Masukkan bulan (YYYY-MM)")
-        return "GRAFIK"
+        return GRAFIK
     else:
         return MENU
 
@@ -181,7 +183,7 @@ async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bulan = update.message.text
 
     cursor.execute("""
-    SELECT tanggal, tipe, nominal
+    SELECT tipe, nominal
     FROM transaksi
     WHERE substr(tanggal, 1, 7) = ?
     """, (bulan,))
@@ -189,31 +191,21 @@ async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = cursor.fetchall()
 
     if not data:
-        await update.message.reply_text("❌ Tidak ada data untuk grafik.")
+        await update.message.reply_text("❌ Tidak ada data.")
         return await start(update, context)
 
-    pemasukan = 0
-    pengeluaran = 0
-
-    for tanggal, tipe, nominal in data:
-        if tipe == "pemasukan":
-            pemasukan += nominal
-        else:
-            pengeluaran += nominal
-
-    labels = ["Pemasukan", "Pengeluaran"]
-    values = [pemasukan, pengeluaran]
+    pemasukan = sum(n for t, n in data if t == "pemasukan")
+    pengeluaran = sum(n for t, n in data if t == "pengeluaran")
 
     plt.figure()
-    plt.bar(labels, values)
-    plt.title(f"Grafik Keuangan {bulan}")
+    plt.bar(["Pemasukan", "Pengeluaran"], [pemasukan, pengeluaran])
+    plt.title(f"Grafik {bulan}")
 
     file_name = f"grafik_{bulan}.png"
     plt.savefig(file_name)
     plt.close()
 
     await update.message.reply_photo(photo=open(file_name, "rb"))
-
     return await start(update, context)
 
 # ================= DELETE =================
@@ -228,8 +220,12 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Gunakan: /delete ID")
 
 # ================= MAIN =================
-def run_bot():
+async def main():
     TOKEN = os.getenv("TOKEN")
+
+    # 🔥 RESET TELEGRAM SESSION (WAJIB)
+    bot = Bot(token=TOKEN)
+    await bot.delete_webhook(drop_pending_updates=True)
 
     app = Application.builder().token(TOKEN).build()
 
@@ -242,7 +238,7 @@ def run_bot():
             INPUT_NOMINAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_nominal)],
             INPUT_TANGGAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_tanggal)],
             LAPORAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, laporan)],
-            "GRAFIK": [MessageHandler(filters.TEXT & ~filters.COMMAND, grafik)],
+            GRAFIK: [MessageHandler(filters.TEXT & ~filters.COMMAND, grafik)],
         },
         fallbacks=[CommandHandler("start", start)],
     )
@@ -251,8 +247,8 @@ def run_bot():
     app.add_handler(CommandHandler("delete", delete))
 
     print("🤖 Bot berjalan...")
-    app.run_polling(drop_pending_updates=True)
+    await app.run_polling(drop_pending_updates=True)
 
 # ================= RUN =================
 if __name__ == "__main__":
-    run_bot()
+    asyncio.run(main())
