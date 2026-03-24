@@ -1,86 +1,194 @@
+import sqlite3
 import os
-import logging
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    filters, ConversationHandler, ContextTypes
+)
 
-# Setup Log
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# ===== TOKEN (AMAN) =====
+TOKEN = os.getenv("TOKEN")
 
-# Definisi Tahapan Percakapan
-CHOOSING_TYPE, CHOOSING_BANK, CHOOSING_CATEGORY, INPUT_AMOUNT, INPUT_DATE = range(5)
+# ===== DATABASE =====
+conn = sqlite3.connect("database.db", check_same_thread=False)
+cursor = conn.cursor()
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS transaksi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipe TEXT,
+    bank TEXT,
+    kategori TEXT,
+    nominal INTEGER,
+    tanggal TEXT
+)
+""")
+conn.commit()
+
+# ===== STATES =====
+MENU, BANK, KATEGORI, NOMINAL, TANGGAL, PILIH_BULAN = range(6)
+
+# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_keyboard = [['Pengeluaran', 'Pemasukan', 'Analisis Cashflow']]
+    keyboard = [["Pemasukan", "Pengeluaran"], ["Lihat Laporan"]]
     await update.message.reply_text(
-        "Halo! Pilih menu di bawah:",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
+        "📌 Pilih menu:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
-    return CHOOSING_TYPE
+    return MENU
 
-async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== MENU =====
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    context.user_data['tipe'] = text
-    
-    if text == 'Analisis Cashflow':
-        # Fitur Analisis (Sederhana)
-        await update.message.reply_text("Fitur analisis sedang disiapkan! Saat ini data masih disimpan sementara.")
-        return ConversationHandler.END
 
-    reply_keyboard = [['BCA', 'Mandiri']]
-    await update.message.reply_text(f"Pilih Bank untuk {text}:", 
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
-    return CHOOSING_BANK
+    if text == "Pengeluaran":
+        context.user_data["tipe"] = "pengeluaran"
+    elif text == "Pemasukan":
+        context.user_data["tipe"] = "pemasukan"
+    elif text == "Lihat Laporan":
+        await update.message.reply_text(
+            "Masukkan bulan (format: YYYY-MM)\nContoh: 2026-03"
+        )
+        return PILIH_BULAN
 
-async def choose_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['bank'] = update.message.text
-    if context.user_data['tipe'] == 'Pengeluaran':
-        reply_keyboard = [['Investasi', 'Kendaraan', 'Rumah', 'Pribadi']]
-        await update.message.reply_text("Pilih kategori pengeluaran:",
-            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
-        return CHOOSING_CATEGORY
+    keyboard = [["BCA", "MANDIRI"]]
+    await update.message.reply_text(
+        "🏦 Pilih Bank:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return BANK
+
+# ===== BANK =====
+async def pilih_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bank"] = update.message.text
+
+    if context.user_data["tipe"] == "pengeluaran":
+        keyboard = [
+            ["Investasi", "Kendaraan"],
+            ["Pribadi", "Rumah"]
+        ]
+        await update.message.reply_text(
+            "📂 Pilih kategori:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return KATEGORI
     else:
-        await update.message.reply_text("Masukkan tanggal (Format: YYYY-MM-DD):", reply_markup=ReplyKeyboardRemove())
-        return INPUT_DATE
+        context.user_data["kategori"] = "-"
+        await update.message.reply_text("💰 Masukkan nominal:")
+        return NOMINAL
 
-async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['kategori'] = update.message.text
-    await update.message.reply_text("Masukkan tanggal (Format: YYYY-MM-DD):", reply_markup=ReplyKeyboardRemove())
-    return INPUT_DATE
+# ===== KATEGORI =====
+async def kategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["kategori"] = update.message.text
+    await update.message.reply_text("💰 Masukkan nominal:")
+    return NOMINAL
 
-async def input_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['tanggal'] = update.message.text
-    await update.message.reply_text("Terakhir, masukkan jumlah nominalnya (angka saja):")
-    return INPUT_AMOUNT
+# ===== NOMINAL =====
+async def nominal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data["nominal"] = int(update.message.text)
+    except:
+        await update.message.reply_text("❌ Masukkan angka yang valid!")
+        return NOMINAL
 
-async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    amount = update.message.text
-    tipe = context.user_data['tipe']
-    bank = context.user_data['bank']
-    tgl = context.user_data['tanggal']
+    await update.message.reply_text("📅 Masukkan tanggal (YYYY-MM-DD):")
+    return TANGGAL
+
+# ===== TANGGAL =====
+async def tanggal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["tanggal"] = update.message.text
+
+    cursor.execute("""
+    INSERT INTO transaksi (tipe, bank, kategori, nominal, tanggal)
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        context.user_data["tipe"],
+        context.user_data["bank"],
+        context.user_data["kategori"],
+        context.user_data["nominal"],
+        context.user_data["tanggal"]
+    ))
+    conn.commit()
+
+    await update.message.reply_text("✅ Data berhasil disimpan!")
+    return await start(update, context)
+
+# ===== LAPORAN BULANAN =====
+async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bulan = update.message.text  # format YYYY-MM
+
+    cursor.execute("""
+    SELECT tipe, SUM(nominal) FROM transaksi
+    WHERE substr(tanggal, 1, 7) = ?
+    GROUP BY tipe
+    """, (bulan,))
     
-    # Di sini data seharusnya disimpan ke Database
-    await update.message.reply_text(f"✅ BERHASIL DICATAT!\n\n{tipe}: Rp{amount}\nBank: {bank}\nTanggal: {tgl}")
-    return ConversationHandler.END
+    data = cursor.fetchall()
 
+    pemasukan = 0
+    pengeluaran = 0
+
+    for d in data:
+        if d[0] == "pemasukan":
+            pemasukan = d[1] or 0
+        elif d[0] == "pengeluaran":
+            pengeluaran = d[1] or 0
+
+    saldo = pemasukan - pengeluaran
+
+    # ===== ANALISA =====
+    if pemasukan == 0 and pengeluaran == 0:
+        analisa = "⚠️ Belum ada data di bulan ini."
+    elif saldo < 0:
+        analisa = (
+            "⚠️ Arus kas BURUK!\n"
+            "Pengeluaran lebih besar dari pemasukan.\n"
+            "Kemungkinan terlalu banyak spending konsumtif."
+        )
+    elif pengeluaran > pemasukan * 0.8:
+        analisa = (
+            "⚠️ Arus kas kurang sehat.\n"
+            "Pengeluaran mendekati pemasukan.\n"
+            "Sebaiknya mulai kontrol pengeluaran."
+        )
+    else:
+        analisa = "✅ Arus kas BAGUS! Keuangan kamu sehat."
+
+    text = f"""
+📊 LAPORAN BULAN {bulan}
+
+💰 Pemasukan: {pemasukan}
+📤 Pengeluaran: {pengeluaran}
+📈 Saldo: {saldo}
+
+🧠 Analisa:
+{analisa}
+"""
+
+    await update.message.reply_text(text)
+    return await start(update, context)
+
+# ===== MAIN =====
 def main():
-    # Ambil Token dari Environment Variable untuk keamanan
-    token = os.getenv("BOT_TOKEN")
-    application = Application.builder().token(token).build()
+    app = Application.builder().token(TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
         states={
-            CHOOSING_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_type)],
-            CHOOSING_BANK: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_bank)],
-            CHOOSING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_category)],
-            INPUT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_date)],
-            INPUT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_amount)],
+            MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu)],
+            BANK: [MessageHandler(filters.TEXT & ~filters.COMMAND, pilih_bank)],
+            KATEGORI: [MessageHandler(filters.TEXT & ~filters.COMMAND, kategori)],
+            NOMINAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, nominal)],
+            TANGGAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tanggal)],
+            PILIH_BULAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, laporan)],
         },
-        fallbacks=[CommandHandler('start', start)],
+        fallbacks=[CommandHandler("start", start)]
     )
 
-    application.add_handler(conv_handler)
-    application.run_polling()
+    app.add_handler(conv)
 
-if __name__ == '__main__':
+    print("Bot berjalan...")
+    app.run_polling()
+
+if __name__ == "__main__":
     main()
