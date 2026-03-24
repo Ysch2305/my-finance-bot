@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
 
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
@@ -13,35 +13,28 @@ logging.basicConfig(level=logging.INFO)
 data = []
 
 # =========================
-# FORMAT DATA
+# SET COMMAND (POPUP TELEGRAM)
 # =========================
-# {
-#   "tanggal": datetime,
-#   "tipe": "pemasukan/pengeluaran",
-#   "jumlah": int,
-#   "keterangan": str,
-#   "bank": str
-# }
+async def set_commands(app):
+    commands = [
+        BotCommand("start", "Mulai bot"),
+        BotCommand("tambah_pemasukan", "Tambah pemasukan"),
+        BotCommand("tambah_pengeluaran", "Tambah pengeluaran"),
+        BotCommand("laporan", "Lihat laporan"),
+        BotCommand("delete", "Hapus data"),
+        BotCommand("grafik", "Grafik keuangan"),
+    ]
+    await app.bot.set_my_commands(commands)
 
 # =========================
-# COMMANDS
+# START
 # =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Bot Keuangan Aktif!\n\n"
-        "Perintah:\n"
-        "/tambah_pemasukan jumlah keterangan bank\n"
-        "/tambah_pengeluaran jumlah keterangan bank\n"
-        "/laporan\n"
-        "/delete index\n"
-        "/grafik"
-    )
+    await update.message.reply_text("✅ Bot siap digunakan")
 
 # =========================
 # TAMBAH PEMASUKAN
 # =========================
-
 async def tambah_pemasukan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         jumlah = int(context.args[0])
@@ -57,14 +50,12 @@ async def tambah_pemasukan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
 
         await update.message.reply_text("✅ Pemasukan ditambahkan!")
-
     except:
         await update.message.reply_text("❌ Format salah!")
 
 # =========================
 # TAMBAH PENGELUARAN
 # =========================
-
 async def tambah_pengeluaran(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         jumlah = int(context.args[0])
@@ -80,14 +71,12 @@ async def tambah_pengeluaran(update: Update, context: ContextTypes.DEFAULT_TYPE)
         })
 
         await update.message.reply_text("✅ Pengeluaran ditambahkan!")
-
     except:
         await update.message.reply_text("❌ Format salah!")
 
 # =========================
 # LAPORAN
 # =========================
-
 async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         await update.message.reply_text("📭 Belum ada data")
@@ -117,9 +106,8 @@ async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 # =========================
-# DELETE DATA
+# DELETE
 # =========================
-
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         index = int(context.args[0])
@@ -133,21 +121,19 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🗑 Data dihapus:\n{deleted['keterangan']} - Rp{deleted['jumlah']}"
         )
-
     except:
         await update.message.reply_text("❌ Format: /delete index")
 
 # =========================
-# GRAFIK BULANAN
+# GRAFIK
 # =========================
-
 async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         await update.message.reply_text("❌ Tidak ada data")
         return
 
     bulan = {}
-    
+
     for item in data:
         key = item["tanggal"].strftime("%Y-%m")
 
@@ -175,7 +161,6 @@ async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # MAIN
 # =========================
-
 def main():
     print("🤖 Bot berjalan...")
 
@@ -188,10 +173,10 @@ def main():
     app.add_handler(CommandHandler("delete", delete))
     app.add_handler(CommandHandler("grafik", grafik))
 
-    # 🔥 FIX ERROR EVENT LOOP
-    app.run_polling(drop_pending_updates=True)
+    # 🔥 SET POPUP COMMAND
+    app.post_init = set_commands
 
-# =========================
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
