@@ -10,6 +10,7 @@ from telegram.ext import (
     filters, ConversationHandler, ContextTypes
 )
 
+# ===== TOKEN =====
 TOKEN = os.getenv("TOKEN")
 
 # ===== DATABASE =====
@@ -50,14 +51,20 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "Pengeluaran":
         context.user_data["tipe"] = "pengeluaran"
+
     elif text == "Pemasukan":
         context.user_data["tipe"] = "pemasukan"
+
     elif text == "Lihat Laporan":
+        context.user_data["mode"] = "laporan"
         await update.message.reply_text("Masukkan bulan (YYYY-MM)")
         return PILIH_BULAN
+
     elif text == "Grafik":
+        context.user_data["mode"] = "grafik"
         await update.message.reply_text("Masukkan bulan (YYYY-MM)")
         return PILIH_BULAN
+
     elif text == "Delete Data":
         cursor.execute("SELECT id, kategori, nominal FROM transaksi")
         rows = cursor.fetchall()
@@ -71,7 +78,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text_list += f"{r[0]}. {r[1]} - {r[2]}\n"
 
         await update.message.reply_text(text_list)
-        await update.message.reply_text("Masukkan ID yang ingin dihapus:")
+        await update.message.reply_text("Masukkan ID (contoh: 1,2,3):")
         return DELETE
 
     keyboard = [["BCA", "MANDIRI"]]
@@ -81,16 +88,19 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return BANK
 
-# ===== DELETE =====
+# ===== DELETE MULTI =====
 async def delete_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        id_delete = int(update.message.text)
-        cursor.execute("DELETE FROM transaksi WHERE id = ?", (id_delete,))
+        ids = update.message.text.split(",")
+
+        for i in ids:
+            cursor.execute("DELETE FROM transaksi WHERE id = ?", (int(i.strip()),))
+
         conn.commit()
 
         await update.message.reply_text("✅ Data berhasil dihapus")
     except:
-        await update.message.reply_text("❌ ID tidak valid")
+        await update.message.reply_text("❌ Format salah! Contoh: 1,2,3")
 
     return await start(update, context)
 
@@ -99,7 +109,10 @@ async def pilih_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bank"] = update.message.text
 
     if context.user_data["tipe"] == "pengeluaran":
-        keyboard = [["Investasi", "Kendaraan"], ["Pribadi", "Rumah"]]
+        keyboard = [
+            ["Investasi", "Kendaraan"],
+            ["Pribadi", "Rumah"]
+        ]
         await update.message.reply_text(
             "📂 Pilih kategori:",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -121,7 +134,7 @@ async def nominal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data["nominal"] = int(update.message.text)
     except:
-        await update.message.reply_text("❌ Masukkan angka!")
+        await update.message.reply_text("❌ Masukkan angka yang valid!")
         return NOMINAL
 
     await update.message.reply_text("📅 Masukkan tanggal (YYYY-MM-DD):")
@@ -146,7 +159,7 @@ async def tanggal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Data berhasil disimpan!")
     return await start(update, context)
 
-# ===== LAPORAN + GRAFIK =====
+# ===== LAPORAN & GRAFIK =====
 async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bulan = update.message.text
 
@@ -161,28 +174,49 @@ async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pengeluaran = sum(d[1] for d in data if d[0] == "pengeluaran")
     saldo = pemasukan - pengeluaran
 
-    text = f"""
+    mode = context.user_data.get("mode")
+
+    # ===== LAPORAN =====
+    if mode == "laporan":
+        if pemasukan == 0 and pengeluaran == 0:
+            analisa = "⚠️ Belum ada transaksi."
+        elif saldo < 0:
+            analisa = "🚨 Cashflow NEGATIF! Bahaya."
+        elif pengeluaran > pemasukan * 0.8:
+            analisa = "⚠️ Pengeluaran tinggi."
+        else:
+            analisa = "✅ Cashflow sehat."
+
+        text = f"""
 📊 LAPORAN {bulan}
 
 💰 Pemasukan: {pemasukan}
 📤 Pengeluaran: {pengeluaran}
 📈 Saldo: {saldo}
-"""
 
-    await update.message.reply_text(text)
+🧠 Analisa:
+{analisa}
+"""
+        await update.message.reply_text(text)
 
     # ===== GRAFIK =====
-    x = ["Pemasukan", "Pengeluaran"]
-    y = [pemasukan, pengeluaran]
+    elif mode == "grafik":
+        if pemasukan == 0 and pengeluaran == 0:
+            await update.message.reply_text("❌ Tidak ada data")
+            return await start(update, context)
 
-    plt.figure()
-    plt.bar(x, y)
+        labels = ['Pemasukan', 'Pengeluaran']
+        sizes = [pemasukan, pengeluaran]
 
-    file = "grafik.png"
-    plt.savefig(file)
-    plt.close()
+        plt.figure()
+        plt.pie(sizes, labels=labels, autopct='%1.1f%%')
+        plt.title(f"Grafik {bulan}")
 
-    await update.message.reply_photo(photo=open(file, "rb"))
+        file = "grafik.png"
+        plt.savefig(file)
+        plt.close()
+
+        await update.message.reply_photo(photo=open(file, "rb"))
 
     return await start(update, context)
 
